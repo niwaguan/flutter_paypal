@@ -1,14 +1,12 @@
 library flutter_paypal;
 
+import 'dart:async';
 import 'dart:core';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_paypal/src/screens/complete_payment.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-// Import for Android features.
-import 'package:webview_flutter_android/webview_flutter_android.dart';
-// Import for iOS features.
-import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 import 'src/PaypalServices.dart';
 import 'src/errors/network_error.dart';
@@ -39,7 +37,7 @@ class UsePaypal extends StatefulWidget {
 }
 
 class UsePaypalState extends State<UsePaypal> {
-  late final WebViewController _controller;
+  final Completer<WebViewController> _controller = Completer();
   String checkoutUrl = '';
   String navUrl = '';
   String executeUrl = '';
@@ -84,7 +82,7 @@ class UsePaypalState extends State<UsePaypal> {
             pageLoading = false;
             loadingError = false;
           });
-        _controller.loadRequest(Uri.parse(checkoutUrl));
+          (await _controller.future).loadUrl(checkoutUrl);
         } else {
           widget.onError(res);
           setState(() {
@@ -127,102 +125,6 @@ class UsePaypalState extends State<UsePaypal> {
     });
     // Enable hybrid composition.
     loadPayment();
-
-    // #docregion platform_features
-    late final PlatformWebViewControllerCreationParams params;
-    if (WebViewPlatform.instance is WebKitWebViewPlatform) {
-      params = WebKitWebViewControllerCreationParams(
-        allowsInlineMediaPlayback: true,
-        mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
-      );
-    } else {
-      params = const PlatformWebViewControllerCreationParams();
-    }
-
-    final WebViewController controller =
-        WebViewController.fromPlatformCreationParams(params);
-    // #enddocregion platform_features
-
-    controller
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0x00000000))
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onProgress: (int progress) {
-            debugPrint('WebView is loading (progress : $progress%)');
-          },
-          onPageStarted: (String url) {
-            setState(() {
-              pageLoading = true;
-              loadingError = false;
-            });
-            debugPrint('Page started loading: $url');
-          },
-          onPageFinished: (String url) {
-            setState(() {
-              navUrl = url;
-              pageLoading = false;
-            });
-          },
-          onWebResourceError: (WebResourceError error) {
-            debugPrint('''
-              Page resource error:
-              code: ${error.errorCode}
-              description: ${error.description}
-              errorType: ${error.errorType}
-              isForMainFrame: ${error.isForMainFrame}
-          ''');
-          },
-          onNavigationRequest: (NavigationRequest request) async {
-            if (request.url.startsWith('https://www.youtube.com/')) {
-              debugPrint('blocking navigation to ${request.url}');
-              return NavigationDecision.prevent;
-            }
-            if (request.url.contains(widget.returnURL)) {
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                    builder: (context) => CompletePayment(
-                        url: request.url,
-                        services: services,
-                        executeUrl: executeUrl,
-                        accessToken: accessToken,
-                        onSuccess: widget.onSuccess,
-                        onCancel: widget.onCancel,
-                        onError: widget.onError)),
-              );
-            }
-            if (request.url.contains(widget.cancelURL)) {
-              final uri = Uri.parse(request.url);
-              await widget.onCancel(uri.queryParameters);
-              Navigator.of(context).pop();
-            }
-            debugPrint('allowing navigation to ${request.url}');
-            return NavigationDecision.navigate;
-          },
-          onUrlChange: (UrlChange change) {
-            debugPrint('url change to ${change.url}');
-          },
-        ),
-      )
-      ..addJavaScriptChannel(
-        'Toaster',
-        onMessageReceived: (JavaScriptMessage message) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(message.message)),
-          );
-        },
-      );
-
-    // #docregion platform_features
-    if (controller.platform is AndroidWebViewController) {
-      AndroidWebViewController.enableDebugging(true);
-      (controller.platform as AndroidWebViewController)
-          .setMediaPlaybackRequiresUserGesture(false);
-    }
-    // #enddocregion platform_features
-
-    _controller = controller;
   }
 
   @override
@@ -243,16 +145,16 @@ class UsePaypalState extends State<UsePaypal> {
         }
       },
       child: Scaffold(
-          appBar: AppBar(
-            backgroundColor: const Color(0xFF272727),
-            leading: GestureDetector(
-              child: const Icon(Icons.arrow_back_ios),
-              onTap: () => Navigator.pop(context),
-            ),
-            title: Row(
-              children: [
-                Expanded(
-                    child: Container(
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          leading: GestureDetector(
+            child: const Icon(Icons.arrow_back_ios),
+            onTap: () => Navigator.pop(context),
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   decoration: BoxDecoration(
@@ -284,47 +186,84 @@ class UsePaypalState extends State<UsePaypal> {
                           : const SizedBox()
                     ],
                   ),
-                ))
-              ],
-            ),
-            elevation: 0,
+                ),
+              )
+            ],
           ),
-          body: SizedBox(
-            height: MediaQuery.of(context).size.height,
-            width: MediaQuery.of(context).size.width,
-            child: loading
-                ? const Column(
-                    children: [
-                      Expanded(
-                        child: Center(
-                          child: SpinKitFadingCube(
-                            color: Color(0xFFEB920D),
-                            size: 30.0,
-                          ),
-                        ),
+          elevation: 0,
+        ),
+        body: SizedBox(
+          height: MediaQuery.of(context).size.height,
+          width: MediaQuery.of(context).size.width,
+          child: loading
+              ? const Center(
+                  child: SpinKitFadingCube(
+                    color: Color(0xFFEB920D),
+                    size: 30.0,
+                  ),
+                )
+              : loadingError
+                  ? Center(
+                      child: NetworkError(
+                        loadData: loadPayment,
+                        message: "Something went wrong,",
                       ),
-                    ],
-                  )
-                : loadingError
-                    ? Column(
-                        children: [
-                          Expanded(
-                            child: Center(
-                              child: NetworkError(
-                                  loadData: loadPayment,
-                                  message: "Something went wrong,"),
+                    )
+                  : WebView(
+                      javascriptMode: JavascriptMode.unrestricted,
+                      onWebViewCreated: (ctl) {
+                        _controller.complete(ctl);
+                      },
+                      onPageStarted: (url) {
+                        setState(() {
+                          pageLoading = true;
+                          loadingError = false;
+                        });
+                      },
+                      onPageFinished: (String url) {
+                        setState(() {
+                          navUrl = url;
+                          pageLoading = false;
+                        });
+                      },
+                      onWebResourceError: (WebResourceError error) {
+                        debugPrint('''
+                        Page resource error:
+                        code: ${error.errorCode}
+                        description: ${error.description}
+                        errorType: ${error.errorType}
+                        ''');
+                      },
+                      navigationDelegate: (request) async {
+                        if (request.url.contains(widget.returnURL)) {
+                          Navigator.pushReplacement(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => CompletePayment(
+                                url: request.url,
+                                services: services,
+                                executeUrl: executeUrl,
+                                accessToken: accessToken,
+                                onSuccess: widget.onSuccess,
+                                onCancel: widget.onCancel,
+                                onError: widget.onError,
+                              ),
                             ),
-                          ),
-                        ],
-                      )
-                    : Column(
-                        children: [
-                          Expanded(
-                            child: WebViewWidget(controller: _controller),
-                          ),
-                        ],
-                      ),
-          )),
+                          );
+                        }
+                        if (request.url.contains(widget.cancelURL)) {
+                          final uri = Uri.parse(request.url);
+                          await widget.onCancel(uri.queryParameters);
+                          if (mounted) {
+                            Navigator.of(context).pop();
+                          }
+                        }
+                        debugPrint('allowing navigation to ${request.url}');
+                        return NavigationDecision.navigate;
+                      },
+                    ),
+        ),
+      ),
     );
   }
 }
