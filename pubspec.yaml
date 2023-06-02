@@ -15,6 +15,8 @@ dependencies:
   http: ^0.13.6
   http_auth: ^1.0.1
   webview_flutter: ^3.0.0
+  paypal_sdk:
+    path: /Users/stormyang/OpenSource/paypal-sdk
 
 dev_dependencies:
   flutter_test:

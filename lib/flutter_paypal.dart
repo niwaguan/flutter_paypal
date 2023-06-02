@@ -4,18 +4,24 @@ import 'dart:async';
 import 'dart:core';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_paypal/src/screens/complete_payment.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
+import 'package:paypal_sdk/core.dart';
+import 'package:paypal_sdk/orders.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-import 'src/PaypalServices.dart';
 import 'src/errors/network_error.dart';
 
 class UsePaypal extends StatefulWidget {
   final Function onSuccess, onCancel, onError;
-  final String returnURL, cancelURL, note, clientId, secretKey;
-  final List transactions;
-  final bool sandboxMode;
+  final String returnURL, cancelURL, note;
+
+  /// An array of purchase units. Each purchase unit establishes a contract
+  /// between a payer and the payee. Each purchase unit represents either a full
+  /// or partial order that the payer intends to purchase from the payee.
+  final List<PurchaseUnitRequest> purchaseUnits;
+
+  final PayPalEnvironment environment;
+
   const UsePaypal({
     Key? key,
     required this.onSuccess,
@@ -23,10 +29,8 @@ class UsePaypal extends StatefulWidget {
     required this.onCancel,
     required this.returnURL,
     required this.cancelURL,
-    required this.transactions,
-    required this.clientId,
-    required this.secretKey,
-    this.sandboxMode = false,
+    required this.purchaseUnits,
+    required this.environment,
     this.note = '',
   }) : super(key: key);
 
@@ -41,25 +45,38 @@ class UsePaypalState extends State<UsePaypal> {
   String checkoutUrl = '';
   String navUrl = '';
   String executeUrl = '';
-  String accessToken = '';
   bool loading = true;
   bool pageLoading = true;
   bool loadingError = false;
-  late PaypalServices services;
   int pressed = 0;
 
-  Map getOrderParams() {
-    Map<String, dynamic> temp = {
-      "intent": "sale",
-      "payer": {"payment_method": "paypal"},
-      "transactions": widget.transactions,
-      "note_to_payer": widget.note,
-      "redirect_urls": {
-        "return_url": widget.returnURL,
-        "cancel_url": widget.cancelURL
-      }
-    };
-    return temp;
+  late final paypalHttpClient = PayPalHttpClient(
+    widget.environment,
+    accessToken: null,
+    loggingEnabled: true,
+    accessTokenUpdatedCallback: (accessToken) async {
+      // Persist token for re-use
+    },
+  );
+
+  late final ordersApi = OrdersApi(paypalHttpClient);
+
+  Order? order;
+
+  Future<Order> createOrder() async {
+    final order = await ordersApi.createOrder(
+      OrderRequest(
+        intent: OrderRequestIntent.capture,
+        purchaseUnits: widget.purchaseUnits,
+        applicationContext: ApplicationContext(
+          returnUrl: widget.returnURL,
+          cancelUrl: widget.cancelURL,
+        ),
+      ),
+    );
+    this.order = order;
+    debugPrint("${order.toJson()}");
+    return order;
   }
 
   loadPayment() async {
@@ -67,33 +84,23 @@ class UsePaypalState extends State<UsePaypal> {
       loading = true;
     });
     try {
-      Map getToken = await services.getAccessToken();
-      if (getToken['token'] != null) {
-        accessToken = getToken['token'];
-        final transactions = getOrderParams();
-        final res =
-            await services.createPaypalPayment(transactions, accessToken);
-        if (res["approvalUrl"] != null) {
-          setState(() {
-            checkoutUrl = res["approvalUrl"].toString();
-            navUrl = res["approvalUrl"].toString();
-            executeUrl = res["executeUrl"].toString();
-            loading = false;
-            pageLoading = false;
-            loadingError = false;
-          });
-          (await _controller.future).loadUrl(checkoutUrl);
-        } else {
-          widget.onError(res);
-          setState(() {
-            loading = false;
-            pageLoading = false;
-            loadingError = true;
-          });
-        }
+      final order = await createOrder();
+      final links = order.links;
+      if (links != null) {
+        setState(() {
+          checkoutUrl =
+              links.firstWhere((element) => element.rel == "approve").href;
+          navUrl = checkoutUrl;
+          executeUrl = checkoutUrl;
+          // executeUrl =
+          //     links.firstWhere((element) => element.rel == "execute").href;
+          loading = false;
+          pageLoading = false;
+          loadingError = false;
+        });
+        (await _controller.future).loadUrl(checkoutUrl);
       } else {
-        widget.onError("${getToken['message']}");
-
+        widget.onError({"msg": "unable to resolve order checkout url."});
         setState(() {
           loading = false;
           pageLoading = false;
@@ -113,156 +120,99 @@ class UsePaypalState extends State<UsePaypal> {
   @override
   void initState() {
     super.initState();
-    services = PaypalServices(
-      sandboxMode: widget.sandboxMode,
-      clientId: widget.clientId,
-      secretKey: widget.secretKey,
-    );
-    setState(() {
-      navUrl = widget.sandboxMode
-          ? 'https://api.sandbox.paypal.com'
-          : 'https://www.api.paypal.com';
-    });
-    // Enable hybrid composition.
+
     loadPayment();
   }
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async {
-        if (pressed < 2) {
-          setState(() {
-            pressed++;
-          });
-          final snackBar = SnackBar(
-              content: Text(
-                  'Press back ${3 - pressed} more times to cancel transaction'));
-          ScaffoldMessenger.of(context).showSnackBar(snackBar);
-          return false;
-        } else {
-          return true;
-        }
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          leading: GestureDetector(
-            child: const Icon(Icons.arrow_back_ios),
-            onTap: () => Navigator.pop(context),
-          ),
-          title: Row(
-            children: [
-              Expanded(
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.3),
-                      borderRadius: BorderRadius.circular(20)),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.lock_outline,
-                        color: Uri.parse(navUrl).hasScheme
-                            ? Colors.green
-                            : Colors.blue,
-                        size: 18,
-                      ),
-                      const SizedBox(width: 5),
-                      Expanded(
-                        child: Text(
-                          navUrl,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ),
-                      SizedBox(width: pageLoading ? 5 : 0),
-                      pageLoading
-                          ? const SpinKitFadingCube(
-                              color: Color(0xFFEB920D),
-                              size: 10.0,
-                            )
-                          : const SizedBox()
-                    ],
-                  ),
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        actions: [
+          if (pageLoading)
+            const Padding(
+              padding: EdgeInsets.only(right: 8.0),
+              child: SpinKitFadingCube(
+                color: Color(0xFFFF6B10),
+                size: 10.0,
+              ),
+            )
+        ],
+        title: const Text("PayPal"),
+        elevation: 0,
+      ),
+      body: SizedBox(
+        height: MediaQuery.of(context).size.height,
+        width: MediaQuery.of(context).size.width,
+        child: loading
+            ? const Center(
+                child: SpinKitFadingCube(
+                  color: Color(0xFFFF6B10),
+                  size: 30.0,
                 ),
               )
-            ],
-          ),
-          elevation: 0,
-        ),
-        body: SizedBox(
-          height: MediaQuery.of(context).size.height,
-          width: MediaQuery.of(context).size.width,
-          child: loading
-              ? const Center(
-                  child: SpinKitFadingCube(
-                    color: Color(0xFFEB920D),
-                    size: 30.0,
-                  ),
-                )
-              : loadingError
-                  ? Center(
-                      child: NetworkError(
-                        loadData: loadPayment,
-                        message: "Something went wrong,",
-                      ),
-                    )
-                  : WebView(
-                      javascriptMode: JavascriptMode.unrestricted,
-                      onWebViewCreated: (ctl) {
-                        _controller.complete(ctl);
-                      },
-                      onPageStarted: (url) {
-                        setState(() {
-                          pageLoading = true;
-                          loadingError = false;
-                        });
-                      },
-                      onPageFinished: (String url) {
-                        setState(() {
-                          navUrl = url;
-                          pageLoading = false;
-                        });
-                      },
-                      onWebResourceError: (WebResourceError error) {
-                        debugPrint('''
-                        Page resource error:
-                        code: ${error.errorCode}
-                        description: ${error.description}
-                        errorType: ${error.errorType}
-                        ''');
-                      },
-                      navigationDelegate: (request) async {
-                        if (request.url.contains(widget.returnURL)) {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => CompletePayment(
-                                url: request.url,
-                                services: services,
-                                executeUrl: executeUrl,
-                                accessToken: accessToken,
-                                onSuccess: widget.onSuccess,
-                                onCancel: widget.onCancel,
-                                onError: widget.onError,
-                              ),
-                            ),
-                          );
-                        }
-                        if (request.url.contains(widget.cancelURL)) {
-                          final uri = Uri.parse(request.url);
-                          await widget.onCancel(uri.queryParameters);
-                          if (mounted) {
-                            Navigator.of(context).pop();
-                          }
-                        }
-                        debugPrint('allowing navigation to ${request.url}');
-                        return NavigationDecision.navigate;
-                      },
+            : loadingError
+                ? Center(
+                    child: NetworkError(
+                      loadData: loadPayment,
+                      message: "Something went wrong,",
                     ),
-        ),
+                  )
+                : WebView(
+                    javascriptMode: JavascriptMode.unrestricted,
+                    onWebViewCreated: (ctl) {
+                      _controller.complete(ctl);
+                    },
+                    onPageStarted: (url) {
+                      setState(() {
+                        pageLoading = true;
+                        loadingError = false;
+                      });
+                    },
+                    onPageFinished: (String url) {
+                      setState(() {
+                        navUrl = url;
+                        pageLoading = false;
+                      });
+                    },
+                    onWebResourceError: (WebResourceError error) {
+                      debugPrint('''
+                      Page resource error:
+                      code: ${error.errorCode}
+                      description: ${error.description}
+                      errorType: ${error.errorType}
+                      ''');
+                    },
+                    navigationDelegate: (request) async {
+                      if (request.url.contains(widget.returnURL)) {
+                        try {
+                          final orderId = order?.id ?? "";
+                          // await ordersApi.showOrderDetails(orderId);
+                          final res = await ordersApi.capturePayment(orderId);
+                          if (res.status == "COMPLETED") {
+                            await widget.onSuccess(res.toJson());
+                            if (mounted) {
+                              Navigator.of(context).pop();
+                            }
+                          }
+                          debugPrint("capture $res");
+                        } catch (e) {
+                          debugPrint("error: $e");
+                        }
+                        return NavigationDecision.navigate;
+                      }
+                      if (request.url.contains(widget.cancelURL)) {
+                        final uri = Uri.parse(request.url);
+                        await widget.onCancel(uri.queryParameters);
+                        if (mounted) {
+                          Navigator.of(context).pop();
+                        }
+                      }
+                      debugPrint('allowing navigation to ${request.url}');
+                      return NavigationDecision.navigate;
+                    },
+                  ),
       ),
     );
   }
