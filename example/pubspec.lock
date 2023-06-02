@@ -197,10 +197,12 @@ packages:
   paypal_sdk:
     dependency: transitive
     description:
-      path: "/Users/stormyang/OpenSource/paypal-sdk"
-      relative: false
-    source: path
-    version: "1.0.3"
+      path: "."
+      ref: HEAD
+      resolved-ref: f14af4745a6bfe83f6f1eccdeab4e9ef5caaae11
+      url: "https://github.com/niwaguan/paypal-sdk.git"
+    source: git
+    version: "1.0.7"
   plugin_platform_interface:
     dependency: transitive
     description:

@@ -16,7 +16,9 @@ dependencies:
   http_auth: ^1.0.1
   webview_flutter: ^3.0.0
   paypal_sdk:
-    path: /Users/stormyang/OpenSource/paypal-sdk
+    git:
+      url: https://github.com/niwaguan/paypal-sdk.git
+      branch: v1.0.3-fix-content-type
 
 dev_dependencies:
   flutter_test:
